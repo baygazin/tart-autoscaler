@@ -1,35 +1,21 @@
-use axum::{
-    Json, Router,
-    extract::{ConnectInfo, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::{get, post},
-};
-use serde::Deserialize;
-use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
-};
+mod api;
+mod github;
+mod security;
+mod store;
+
+use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
-type TokenStore = Arc<Mutex<HashMap<IpAddr, String>>>;
-
-#[derive(Deserialize)]
-struct SeedRequest {
-    ip: IpAddr,
-    jit_config: String,
-}
+use api::build_router;
+use security::WebhookVerifier;
+use store::JitTokenStore;
 
 #[tokio::main]
 async fn main() {
-    let store: TokenStore = Arc::new(Mutex::new(HashMap::new()));
+    let webhook_secret =
+        std::env::var("GITHUB_WEBHOOK_SECRET").expect("GITHUB_WEBHOOK_SECRET must be set");
 
-    let app = Router::new()
-        .route("/healthz", get(healthz))
-        .route("/internal/v1/tokens", post(seed_token))
-        .route("/api/v1/bootstrap", get(bootstrap))
-        .with_state(store);
+    let app = build_router(JitTokenStore::new(), WebhookVerifier::new(webhook_secret));
 
     let listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
     println!("metadata server listening on http://0.0.0.0:8080");
@@ -40,39 +26,4 @@ async fn main() {
     )
     .await
     .unwrap();
-}
-
-async fn healthz() -> &'static str {
-    "ok"
-}
-
-async fn seed_token(
-    State(store): State<TokenStore>,
-    Json(payload): Json<SeedRequest>,
-) -> StatusCode {
-    let mut tokens = store.lock().unwrap();
-    tokens.insert(payload.ip, payload.jit_config);
-
-    println!("seeded token for {} ({} pending)", payload.ip, tokens.len());
-
-    StatusCode::CREATED
-}
-
-async fn bootstrap(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    State(store): State<TokenStore>,
-) -> Response {
-    let ip = peer.ip();
-    let token = store.lock().unwrap().remove(&ip);
-
-    match token {
-        Some(jit_config) => {
-            println!("issued token to {ip}, burned");
-            (StatusCode::OK, jit_config).into_response()
-        }
-        None => {
-            println!("rejected {ip}: no token");
-            StatusCode::NOT_FOUND.into_response()
-        }
-    }
 }
