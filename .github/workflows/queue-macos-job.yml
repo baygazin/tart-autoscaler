@@ -1,0 +1,13 @@
+name: Queue a macOS job
+
+# Manual trigger only: this job asks for a self-hosted runner that does not exist
+# yet, so it parks in the queue and GitHub emits workflow_job.queued for the
+# autoscaler to react to. Cancel the run when you are done looking at it.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: [self-hosted, macOS, ARM64, xcode-16]
+    steps:
+      - run: echo "Picked up by a Tart VM"
